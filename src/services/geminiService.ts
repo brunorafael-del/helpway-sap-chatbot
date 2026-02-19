@@ -18,7 +18,8 @@ export async function askGemini(prompt: string, knowledge: KnowledgeItem[], hist
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "Erro ao consultar a IA");
+        const details = errorData.details ? `\n\n**Detalhes:** ${JSON.stringify(errorData.details)}` : "";
+        throw new Error(`${errorData.error}${details}`);
       } else {
         const text = await response.text();
         console.error("Backend non-JSON error:", text);

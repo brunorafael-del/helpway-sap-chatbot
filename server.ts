@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import axios from "axios";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +43,16 @@ export const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Debug endpoint to check environment
+app.get("/api/debug", (req, res) => {
+  res.json({
+    node_env: process.env.NODE_ENV,
+    has_tess_key: !!process.env.TESS_API_KEY,
+    tess_key_prefix: process.env.TESS_API_KEY ? `${process.env.TESS_API_KEY.substring(0, 5)}...` : "none",
+    timestamp: new Date().toISOString()
+  });
+});
 
 // API Routes
 app.get("/api/knowledge", async (req, res) => {
@@ -181,33 +192,26 @@ ${knowledgeContext}
   ];
 
   try {
-    // Using the ID might be more stable than the slug for some API versions
-    // Also ensuring the URL matches the user's successful test base
-    const tessResponse = await fetch("https://api.tess.im/api/agents/37609/execute", {
-      method: "POST",
+    const apiKey = (process.env.TESS_API_KEY || "").trim();
+    
+    // Using axios as it's more robust in some environments
+    const response = await axios({
+      method: "post",
+      url: "https://api.tess.im/api/agents/37609/execute",
       headers: {
-        "Authorization": `Bearer ${process.env.TESS_API_KEY}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      body: JSON.stringify({
+      data: {
         messages,
         model: "auto",
         stream: false
-      })
+      },
+      timeout: 30000 // 30 seconds timeout
     });
 
-    const contentType = tessResponse.headers.get("content-type");
-    if (!contentType || !contentType.includes("application/json")) {
-      const text = await tessResponse.text();
-      console.error("Tess API non-JSON response:", text);
-      return res.status(500).json({ 
-        error: "A API TESS retornou um erro inesperado (HTML).",
-        details: text.substring(0, 100)
-      });
-    }
-
-    const data = await tessResponse.json();
+    const data = response.data;
     
     // Tess API response structure usually has the result in a 'content' or 'output' field
     const aiText = data.output || data.content || (data.choices && data.choices[0]?.message?.content);
@@ -219,9 +223,24 @@ ${knowledgeContext}
 
     res.json({ text: aiText });
   } catch (error: any) {
-    console.error("Tess Chat Error:", error);
+    console.error("Tess Chat Error:", error.response?.data || error.message);
+    
+    // If it's an axios error with a response
+    if (error.response) {
+      return res.status(error.response.status).json({ 
+        error: `Erro na API TESS (${error.response.status})`, 
+        details: error.response.data 
+      });
+    }
+
     res.status(500).json({ error: "Erro interno ao processar chat", details: error.message });
   }
+});
+
+// Global Error Handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("GLOBAL ERROR:", err);
+  res.status(500).json({ error: "Erro crítico no servidor", message: err.message });
 });
 
 async function startServer() {
